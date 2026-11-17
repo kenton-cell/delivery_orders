@@ -36,9 +36,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != 0000000000000000000000000000000000000000 ]; then
+            # A force-push can leave the old tip out of the checkout; fetch it rather than narrow the scan.
+            if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null && ! git fetch --no-tags --quiet origin "$BASE_SHA"; then
+              echo "::error::Cannot fetch the previous tip $BASE_SHA, so the new commits cannot be isolated."
+              exit 1
+            fi
             range="$BASE_SHA..$HEAD_SHA"
           else
-            range="-1 $HEAD_SHA"
+            # This push created the branch: scan every commit no other branch already has.
+            others=$(git for-each-ref --format='%(refname)' refs/remotes/origin | grep -vx -e "refs/remotes/origin/$GITHUB_REF_NAME" -e refs/remotes/origin/HEAD | paste -sd' ' - || true)
+            range="$HEAD_SHA${others:+ --not $others}"
           fi
           "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose --log-opts="$range" .
